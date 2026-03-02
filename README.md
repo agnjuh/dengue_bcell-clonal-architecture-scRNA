@@ -1,4 +1,5 @@
-# B cell clonal architecture and somatic diversification across H1, H4, S1 and S4
+# Integrated single-cell analysis of Dengue B cell repertoires
+## Transcriptional structure, IGH clonal expansion and somatic diversification across four samples
 
 This repository presents an integrated single-cell analysis of B cell receptor repertoires across four samples (H1, H4, S1, S4). The framework combines clonotype reconstruction, somatic hypermutation (SHM) quantification, V gene usage profiling, isotype distribution and CDR3 amino-acid length analysis within a transcriptionally resolved landscape.
 
