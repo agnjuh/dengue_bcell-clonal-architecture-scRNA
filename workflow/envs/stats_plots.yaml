@@ -1,0 +1,10 @@
+name: stats_plots
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - scipy
+  - matplotlib

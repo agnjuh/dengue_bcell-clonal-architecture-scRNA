@@ -1,0 +1,11 @@
+name: mixcr
+channels:
+  - milaboratories
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - mixcr
+  - openjdk
+  - python=3.10
+  - pandas

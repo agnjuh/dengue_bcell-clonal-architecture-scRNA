@@ -1,0 +1,35 @@
+# OS / editor
+.DS_Store
+*.swp
+*~
+*.bak
+
+# results (already)
+results/
+
+# raw / large data
+data/raw/
+data/**/raw/
+*.h5
+*.h5ad
+*.loom
+*.rds
+*.qs
+*.csv.gz
+*.tsv.gz
+*.fastq.gz
+*.fasta.gz
+
+# bundles / binaries
+resources/igblast_full/
+resources/ncbi_igblast_bundle/
+resources/**/blastdb/*.n*
+resources/**/blastdb/*.p*
+
+# snakemake / conda caches
+.snakemake/
+**/.snakemake/
+
+# accidental copies
+workflow/*copy*
+workflow/*Copy*

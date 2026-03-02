@@ -1,0 +1,13 @@
+name: igblast_changeo
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - pandas>=2.0
+  - numpy
+  - biopython
+  - ncbi-igblast
+  - changeo
+  - presto

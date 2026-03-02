@@ -1,0 +1,815 @@
+############################################
+# dengue-scBCR-clonal-architecture pipeline
+# 10x VDJ-B -> IGH FASTA -> short FASTA+idmap
+# -> IgBLAST short outfmt7 (junction parsing)
+# -> IgBLAST short AIRR outfmt19 + id remap
+# -> ChangeO-like DB -> DefineClones -> sweep
+# -> SHM from AIRR (v_identity) + stats/plots + clone-size vs SHM correlation
+# -> Top expanded clones report
+# -> MiXCR benchmark vs Immcantation (+ master benchmark summary)
+############################################
+
+import re
+import pandas as pd
+from pathlib import Path
+
+# Project root & workdir
+BASEDIR = Path(workflow.basedir).resolve()      # .../workflow
+PROJECT_ROOT = BASEDIR.parent                   # project root
+workdir: str(PROJECT_ROOT)
+
+# Config
+SAMPLES_YML = Path("config/samples.yml")
+PARAMS_YML  = Path("config/params.yml")
+
+configfile: str(SAMPLES_YML)
+if PARAMS_YML.exists():
+    configfile: str(PARAMS_YML)
+
+samples_cfg = config.get("samples", {})
+
+def _parse_samples(samples_cfg):
+    out = {}
+    if isinstance(samples_cfg, dict):
+        for sample, val in samples_cfg.items():
+            if isinstance(val, str):
+                out[str(sample)] = {"vdj_b": str(val)}
+            elif isinstance(val, dict) and "vdj_b" in val:
+                out[str(sample)] = {"vdj_b": str(val["vdj_b"])}
+            else:
+                raise ValueError(
+                    "config/samples.yml format must be either\n"
+                    "  samples: {H1: 'path'}\n"
+                    "or\n"
+                    "  samples: {H1: {vdj_b: 'path'}}"
+                )
+        return out
+
+    if isinstance(samples_cfg, list):
+        for row in samples_cfg:
+            if not isinstance(row, dict) or "sample" not in row or "vdj_b" not in row:
+                raise ValueError("config/samples.yml list elements must contain keys: sample, vdj_b")
+            out[str(row["sample"])] = {"vdj_b": str(row["vdj_b"])}
+        return out
+
+    raise ValueError("config/samples.yml: `samples` must be a dict or a list.")
+
+SAMPLES = _parse_samples(samples_cfg)
+SAMPLE_NAMES = sorted(SAMPLES.keys())
+
+def vdj_b_path(wildcards):
+    p = Path(SAMPLES[wildcards.sample]["vdj_b"])
+    # Interpret relative paths as relative to PROJECT_ROOT (workdir)
+    return str(p if p.is_absolute() else (PROJECT_ROOT / p))
+
+# Resources (relative to project root)
+GERMLINE_DIR = Path("resources/germline/imgt_IGH")
+V_FASTA = str(GERMLINE_DIR / "human_IGHV_imgt.fasta")
+D_FASTA = str(GERMLINE_DIR / "human_IGHD_imgt.fasta")
+J_FASTA = str(GERMLINE_DIR / "human_IGHJ_imgt.fasta")
+
+IGBLAST_ROOT = Path("resources/igblast_full/ncbi-igblast-1.22.0")
+IGBLAST_BIN  = str(IGBLAST_ROOT / "bin/igblastn")
+IGDATA_DIR   = str(IGBLAST_ROOT)
+
+BLASTDB_DIR = Path("resources/germline/imgt_IGH/blastdb")
+V_DB = str(BLASTDB_DIR / "human_IGHV_imgt")
+D_DB = str(BLASTDB_DIR / "human_IGHD_imgt")
+J_DB = str(BLASTDB_DIR / "human_IGHJ_imgt")
+AUX_DATA = str(IGBLAST_ROOT / "optional_file/human_gl.aux")
+
+# Outputs (RELATIVE paths; this fixes MissingRule on targets)
+FASTA_DIR        = Path("results/fasta")
+FASTA_SHORT_DIR  = Path("results/fasta_short")
+MAPS_DIR         = Path("results/maps")
+IGBLAST_RAW_DIR  = Path("results/igblast_raw")
+IGBLAST_AIRR_DIR = Path("results/igblast_airr")
+CHANGEO_DIR      = Path("results/changeo_db")
+CLONES_DIR       = Path("results/clones")
+SWEEP_DIR        = Path("results/clones/sweep")
+MIXCR_DIR        = Path("results/mixcr")
+
+OK_FILE = Path("results/germline_ok.txt")
+LOG_DIR = Path("logs")
+
+METRICS_DIR = Path("results/metrics")
+FIGURES_DIR = Path("results/figures")
+
+TENX_SCRIPT = Path("scripts/tenx_vdjB_to_igh_fasta.py")
+TENX_ENV    = "envs/tenx_to_fasta.yaml"
+
+STATS_ENV   = "envs/stats_plots.yaml"
+MIXCR_ENV   = "envs/mixcr.yaml"
+
+# Params
+clone_dist   = float(config.get("clone_dist", 0.16))
+sweep_dists  = config.get("sweep_dists", [0.12,0.14,0.16,0.18,0.20,0.22,0.25,0.28,0.30])
+
+TOP_N_EXPANDED     = int(config.get("top_n_expanded_clones", 30))
+BENCH_MIN_EXP_SIZE = int(config.get("benchmark_min_expanded_size", 2))
+
+# MiXCR parameters (config overridable)
+MIXCR_PRESET  = str(config.get("mixcr_preset", "generic-amplicon"))
+MIXCR_SPECIES = str(config.get("mixcr_species", "hsa"))
+MIXCR_RNA     = bool(config.get("mixcr_rna", True))
+
+# boundaries for MiXCR v4 preset bundle validation
+MIXCR_LEFT_BOUNDARY          = str(config.get("mixcr_left_boundary", "floating")).lower()   # floating|rigid
+MIXCR_RIGHT_BOUNDARY_MODE    = str(config.get("mixcr_right_boundary_mode", "floating")).lower()  # floating|rigid
+MIXCR_RIGHT_BOUNDARY_ANCHOR  = str(config.get("mixcr_right_boundary_anchor", "J")).upper()       # J|C
+MIXCR_ASSEMBLE_BY            = str(config.get("mixcr_assemble_by", "CDR3"))                      # e.g. CDR3
+
+# Ensure dirs exist
+for d in [
+    LOG_DIR, FASTA_DIR, FASTA_SHORT_DIR, MAPS_DIR, IGBLAST_RAW_DIR, IGBLAST_AIRR_DIR,
+    CHANGEO_DIR, CLONES_DIR, SWEEP_DIR, METRICS_DIR, FIGURES_DIR, MIXCR_DIR, OK_FILE.parent
+]:
+    d.mkdir(parents=True, exist_ok=True)
+
+
+# all
+#
+rule all:
+    input:
+        # clones + threshold sweep
+        expand(str(CLONES_DIR / "{sample}.clones.tsv"), sample=SAMPLE_NAMES),
+        expand(str(SWEEP_DIR / "{sample}.threshold_sweep.summary.tsv"), sample=SAMPLE_NAMES),
+
+        # SHM per sample
+        expand(str(METRICS_DIR / "{sample}.shm.tsv"), sample=SAMPLE_NAMES),
+        expand(str(METRICS_DIR / "{sample}.shm.summary.txt"), sample=SAMPLE_NAMES),
+
+        # SHM stats across samples + plots
+        str(METRICS_DIR / "shm_stats.summary.tsv"),
+        str(FIGURES_DIR / "SHM_box_by_sample.png"),
+        str(FIGURES_DIR / "SHM_ecdf_by_sample.png"),
+
+        # clone size vs SHM correlation summary + ALL scatter
+        str(METRICS_DIR / "clone_size_vs_shm.spearman.tsv"),
+        str(FIGURES_DIR / "ALL.clone_size_vs_shm.scatter.png"),
+
+        # Top expanded clones report per sample
+        expand(str(METRICS_DIR / "{sample}.top_expanded_clones.tsv"), sample=SAMPLE_NAMES),
+        expand(str(METRICS_DIR / "{sample}.top_expanded_clones.summary.txt"), sample=SAMPLE_NAMES),
+
+        # MiXCR outputs per sample
+        expand(str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.readId_to_cloneId.tsv"), sample=SAMPLE_NAMES),
+        expand(str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.clones.tsv"), sample=SAMPLE_NAMES),
+
+        # NEW: MiXCR sequence_id -> cloneId map (for benchmarking)
+        expand(str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.sequenceId_to_cloneId.tsv"), sample=SAMPLE_NAMES),
+
+        # Benchmark per sample + master
+        expand(str(METRICS_DIR / "{sample}.mixcr_benchmark.tsv"), sample=SAMPLE_NAMES),
+        expand(str(METRICS_DIR / "{sample}.mixcr_benchmark.summary.txt"), sample=SAMPLE_NAMES),
+        str(METRICS_DIR / "mixcr_benchmark.master.tsv")
+
+
+# check germline
+#
+rule check_germline_fastas:
+    input:
+        v=V_FASTA, d=D_FASTA, j=J_FASTA
+    output:
+        ok=str(OK_FILE)
+    log:
+        str(LOG_DIR / "check_germline_fastas.log")
+    shell:
+        r"""
+        set -euo pipefail
+        test -s "{input.v}"; test -s "{input.d}"; test -s "{input.j}"
+        awk 'NF{{print; exit}}' "{input.v}" | grep -q '^>'
+        awk 'NF{{print; exit}}' "{input.d}" | grep -q '^>'
+        awk 'NF{{print; exit}}' "{input.j}" | grep -q '^>'
+        {{
+          echo "V file: {input.v}"
+          echo "D file: {input.d}"
+          echo "J file: {input.j}"
+          echo "V records: $(grep -c '^>' "{input.v}")"
+          echo "D records: $(grep -c '^>' "{input.d}")"
+          echo "J records: $(grep -c '^>' "{input.j}")"
+        }} > "{log}"
+        echo "OK" > "{output.ok}"
+        """
+
+
+# 10x contigs -> IGH fasta
+#
+rule tenx_vdjB_to_igh_fasta:
+    input:
+        ok=str(OK_FILE),
+        vdj=vdj_b_path
+    output:
+        fasta=str(FASTA_DIR / "{sample}.IGH.fasta")
+    log:
+        str(LOG_DIR / "{sample}.tenx_to_fasta.log")
+    conda:
+        TENX_ENV
+    threads: 1
+    shell:
+        r"""
+        set -euo pipefail
+        python "{TENX_SCRIPT}" \
+          -i "{input.vdj}" \
+          -o "{output.fasta}" \
+          --chain IGH \
+          --only-productive \
+          2> "{log}"
+        """
+
+
+# short fasta + idmap
+#
+rule make_short_fasta_and_idmap:
+    input:
+        fasta=str(FASTA_DIR / "{sample}.IGH.fasta")
+    output:
+        short_fasta=str(FASTA_SHORT_DIR / "{sample}.IGH.short.fasta"),
+        idmap=str(MAPS_DIR / "{sample}.idmap.tsv")
+    log:
+        str(LOG_DIR / "{sample}.make_short_fasta.log")
+    run:
+        n = 0
+        header = None
+        seq_parts = []
+
+        with open(input.fasta, "r", encoding="utf-8", errors="replace") as fh, \
+             open(output.short_fasta, "w", encoding="utf-8") as fo, \
+             open(output.idmap, "w", encoding="utf-8") as fm:
+
+            for line in fh:
+                line = line.rstrip("\n")
+                if line.startswith(">"):
+                    if header is not None:
+                        n += 1
+                        sid = f"{wildcards.sample}_{n:06d}"
+                        fm.write(sid + "\t" + header + "\n")
+                        fo.write(">" + sid + "\n" + "".join(seq_parts) + "\n")
+                    header = line[1:].strip()
+                    seq_parts = []
+                else:
+                    if line.strip():
+                        seq_parts.append(line.strip())
+
+            if header is not None:
+                n += 1
+                sid = f"{wildcards.sample}_{n:06d}"
+                fm.write(sid + "\t" + header + "\n")
+                fo.write(">" + sid + "\n" + "".join(seq_parts) + "\n")
+
+        Path(log[0]).write_text(f"Wrote {n} records\n")
+
+
+# IgBLAST short outfmt7 (junction parsing)
+#
+rule igblast_short_outfmt7:
+    input:
+        short_fasta=str(FASTA_SHORT_DIR / "{sample}.IGH.short.fasta"),
+        ok=str(OK_FILE)
+    output:
+        igblast=str(IGBLAST_RAW_DIR / "{sample}.short.igblast.txt")
+    log:
+        str(LOG_DIR / "{sample}.igblast_short.outfmt7.log")
+    threads: 4
+    shell:
+        r"""
+        set -euo pipefail
+        IGDATA="{IGDATA_DIR}" "{IGBLAST_BIN}" \
+          -query "{input.short_fasta}" \
+          -germline_db_V "{V_DB}" \
+          -germline_db_D "{D_DB}" \
+          -germline_db_J "{J_DB}" \
+          -auxiliary_data "{AUX_DATA}" \
+          -domain_system imgt \
+          -organism human \
+          -ig_seqtype Ig \
+          -num_alignments_V 1 -num_alignments_D 1 -num_alignments_J 1 \
+          -outfmt 7 \
+          -num_threads {threads} \
+          -out "{output.igblast}" \
+          2> "{log}"
+        """
+
+
+# IgBLAST short AIRR outfmt19
+#
+rule igblast_short_airr:
+    input:
+        short_fasta=str(FASTA_SHORT_DIR / "{sample}.IGH.short.fasta"),
+        ok=str(OK_FILE)
+    output:
+        airr=str(IGBLAST_AIRR_DIR / "{sample}.short.airr.tsv")
+    log:
+        str(LOG_DIR / "{sample}.igblast_short.airr.log")
+    threads: 4
+    shell:
+        r"""
+        set -euo pipefail
+        IGDATA="{IGDATA_DIR}" "{IGBLAST_BIN}" \
+          -query "{input.short_fasta}" \
+          -germline_db_V "{V_DB}" \
+          -germline_db_D "{D_DB}" \
+          -germline_db_J "{J_DB}" \
+          -auxiliary_data "{AUX_DATA}" \
+          -domain_system imgt \
+          -organism human \
+          -ig_seqtype Ig \
+          -num_alignments_V 1 -num_alignments_D 1 -num_alignments_J 1 \
+          -outfmt 19 \
+          -num_threads {threads} \
+          -out "{output.airr}" \
+          2> "{log}"
+        """
+
+
+# Remap AIRR sequence_id: short_id -> original long header (10x)
+#
+rule remap_airr_sequence_id:
+    input:
+        airr=str(IGBLAST_AIRR_DIR / "{sample}.short.airr.tsv"),
+        idmap=str(MAPS_DIR / "{sample}.idmap.tsv")
+    output:
+        airr=str(IGBLAST_AIRR_DIR / "{sample}.airr.tsv")
+    log:
+        str(LOG_DIR / "{sample}.remap_airr.log")
+    run:
+        m = pd.read_csv(input.idmap, sep="\t", header=None, names=["short_id","orig_id"], dtype=str)
+        short2orig = dict(zip(m["short_id"], m["orig_id"]))
+
+        df = pd.read_csv(input.airr, sep="\t", dtype=str).fillna("")
+        if "sequence_id" not in df.columns:
+            raise ValueError(f"AIRR file missing sequence_id column: {input.airr}")
+
+        df["sequence_id"] = df["sequence_id"].map(short2orig).fillna(df["sequence_id"])
+        df.to_csv(output.airr, sep="\t", index=False)
+        Path(log[0]).write_text(f"Rows: {len(df)}\n")
+
+
+# Build ChangeO-like minimal DB
+#
+rule build_changeo_like_db:
+    input:
+        airr=str(IGBLAST_AIRR_DIR / "{sample}.airr.tsv"),
+        short_igblast=str(IGBLAST_RAW_DIR / "{sample}.short.igblast.txt"),
+        idmap=str(MAPS_DIR / "{sample}.idmap.tsv")
+    output:
+        db=str(CHANGEO_DIR / "{sample}.db.tsv")
+    log:
+        str(LOG_DIR / "{sample}.build_db.log")
+    run:
+        m = pd.read_csv(input.idmap, sep="\t", header=None, names=["short_id","orig_id"], dtype=str)
+        short2orig = dict(zip(m["short_id"], m["orig_id"]))
+
+        junction = {}
+        current = None
+        want_next = False
+
+        def clean_junc(s: str) -> str:
+            s = re.sub(r"\s+", "", s)
+            s = s.replace("(", "").replace(")", "").replace("-", "")
+            return s
+
+        with open(input.short_igblast, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.rstrip("\n")
+                if line.startswith("# Query:"):
+                    current = line.split(":",1)[1].strip()
+                    want_next = False
+                elif line.startswith("# V-(D)-J junction details"):
+                    want_next = True
+                elif want_next:
+                    if not line.strip():
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) >= 5 and current:
+                        junction[current] = clean_junc("".join(parts[:5]))
+                    want_next = False
+
+        orig_junction = { short2orig[sid]: j for sid, j in junction.items() if sid in short2orig }
+
+        df = pd.read_csv(input.airr, sep="\t", dtype=str).fillna("")
+        prod = df.get("productive","").replace({"True":"T","False":"F","TRUE":"T","FALSE":"F"})
+        prod = prod.where(prod.isin(["T","F"]), "F")
+
+        junc = df["sequence_id"].map(orig_junction).fillna("")
+
+        out = pd.DataFrame({
+            "SEQUENCE_ID": df.get("sequence_id",""),
+            "SEQUENCE_INPUT": df.get("sequence",""),
+            "V_CALL": df.get("v_call",""),
+            "D_CALL": df.get("d_call",""),
+            "J_CALL": df.get("j_call",""),
+            "JUNCTION": junc,
+            "JUNCTION_LENGTH": junc.str.len().astype(str).replace("0",""),
+            "FUNCTIONAL": prod
+        })
+
+        out.to_csv(output.db, sep="\t", index=False)
+        Path(log[0]).write_text(f"Rows: {len(out)}\n")
+
+
+# Clean + lowercase (DefineClones needs lowercase fields)
+#
+rule clean_and_lowercase_db:
+    input:
+        db=str(CHANGEO_DIR / "{sample}.db.tsv")
+    output:
+        clean_db=str(CHANGEO_DIR / "{sample}.db.cleaned.lower.tsv")
+    log:
+        str(LOG_DIR / "{sample}.clean_db.log")
+    run:
+        df = pd.read_csv(input.db, sep="\t", dtype=str).fillna("")
+        df["FUNCTIONAL"] = "T"
+
+        def clean_junction(s: str) -> str:
+            s = (s or "").upper()
+            s = re.sub(r"[^ACGTN]", "N", s)
+            s = re.sub(r"N{2,}", "N", s)
+            return s
+
+        df["JUNCTION"] = df["JUNCTION"].map(clean_junction)
+        df["JUNCTION_LENGTH"] = df["JUNCTION"].str.len().astype(str).replace("0","")
+
+        df.columns = [c.lower() for c in df.columns]
+        df.to_csv(output.clean_db, sep="\t", index=False)
+        Path(log[0]).write_text(f"Rows: {len(df)}\n")
+
+
+# DefineClones
+#
+rule define_clones:
+    input:
+        db=str(CHANGEO_DIR / "{sample}.db.cleaned.lower.tsv")
+    output:
+        clones=str(CLONES_DIR / "{sample}.clones.tsv")
+    log:
+        str(LOG_DIR / "{sample}.define_clones.log")
+    threads: 4
+    shell:
+        r"""
+        set -euo pipefail
+        DefineClones.py \
+          -d "{input.db}" \
+          --act set \
+          --model ham \
+          --norm len \
+          --dist {clone_dist} \
+          --nproc {threads} \
+          -o "{output.clones}" \
+          > "{log}" 2>&1
+        """
+
+
+# Sweep thresholds
+#
+rule sweep_thresholds:
+    input:
+        db=str(CHANGEO_DIR / "{sample}.db.cleaned.lower.tsv")
+    output:
+        summary=str(SWEEP_DIR / "{sample}.threshold_sweep.summary.tsv")
+    log:
+        str(LOG_DIR / "{sample}.sweep_thresholds.log")
+    threads: 4
+    run:
+        outdir = SWEEP_DIR / wildcards.sample
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        rows = []
+        import subprocess
+
+        for dist in sweep_dists:
+            dist = float(dist)
+            tag = f"{wildcards.sample}.dist{dist:.2f}"
+            out_clones = outdir / f"{tag}.clones.tsv"
+            out_log = outdir / f"{tag}.log"
+
+            cmd = [
+                "DefineClones.py",
+                "-d", str(input.db),
+                "--act", "set",
+                "--model", "ham",
+                "--norm", "len",
+                "--dist", str(dist),
+                "--nproc", str(threads),
+                "-o", str(out_clones)
+            ]
+
+            p = subprocess.run(cmd, capture_output=True, text=True)
+            out_log.write_text((p.stdout or "") + "\n" + (p.stderr or ""))
+
+            text = (p.stdout or "") + "\n" + (p.stderr or "")
+
+            def get_int(prefix):
+                m = re.search(rf"^\s*{prefix}>\s*([0-9]+)", text, flags=re.M)
+                return int(m.group(1)) if m else None
+
+            clones  = get_int("CLONES")
+            records = get_int("RECORDS")
+            passed  = get_int("PASS")
+            failed  = get_int("FAIL")
+
+            if out_clones.exists():
+                ddf = pd.read_csv(out_clones, sep="\t", dtype=str).fillna("")
+                sizes = ddf.groupby("clone_id").size()
+                singleton_frac = float((sizes == 1).sum() / len(sizes)) if len(sizes) else float("nan")
+                max_size = int(sizes.max()) if len(sizes) else 0
+            else:
+                singleton_frac = float("nan")
+                max_size = 0
+
+            rows.append({
+                "sample": wildcards.sample,
+                "dist": dist,
+                "clones": clones,
+                "records": records,
+                "pass": passed,
+                "fail": failed,
+                "singleton_frac": singleton_frac,
+                "max_clone_size": max_size,
+                "outfile": str(out_clones),
+                "logfile": str(out_log)
+            })
+
+        res = pd.DataFrame(rows).sort_values("dist")
+        res.to_csv(output.summary, sep="\t", index=False)
+        Path(log[0]).write_text("Wrote: " + str(output.summary) + "\n")
+
+
+# SHM from AIRR (v_identity) + clones
+#
+rule shm_from_airr:
+    input:
+        airr=str(IGBLAST_AIRR_DIR / "{sample}.airr.tsv"),
+        clones=str(CLONES_DIR / "{sample}.clones.tsv")
+    output:
+        tsv=str(METRICS_DIR / "{sample}.shm.tsv"),
+        summary=str(METRICS_DIR / "{sample}.shm.summary.txt")
+    log:
+        str(LOG_DIR / "{sample}.shm_from_airr.log")
+    conda:
+        STATS_ENV
+    shell:
+        r"""
+        set -euo pipefail
+        python scripts/compute_shm_from_airr.py \
+          --airr "{input.airr}" \
+          --clones "{input.clones}" \
+          --out_tsv "{output.tsv}" \
+          --out_summary "{output.summary}" \
+          > "{log}" 2>&1
+        """
+
+
+# SHM stats across samples + plots
+#
+rule shm_stats_and_plots:
+    input:
+        expand(str(METRICS_DIR / "{sample}.shm.tsv"), sample=SAMPLE_NAMES)
+    output:
+        summary=str(METRICS_DIR / "shm_stats.summary.tsv"),
+        box=str(FIGURES_DIR / "SHM_box_by_sample.png"),
+        ecdf=str(FIGURES_DIR / "SHM_ecdf_by_sample.png")
+    log:
+        str(LOG_DIR / "shm_stats_and_plots.log")
+    conda:
+        STATS_ENV
+    params:
+        samples=" ".join(SAMPLE_NAMES),
+        metrics_dir=str(METRICS_DIR),
+        figures_dir=str(FIGURES_DIR)
+    shell:
+        r"""
+        set -euo pipefail
+        python scripts/shm_stats_and_plots.py \
+          --samples {params.samples} \
+          --metrics_dir "{params.metrics_dir}" \
+          --out_dir "{params.figures_dir}" \
+          --out_tsv "{output.summary}" \
+          > "{log}" 2>&1
+        """
+
+
+# Clone-size vs SHM correlation
+#
+rule clone_size_shm_correlation:
+    input:
+        expand(str(METRICS_DIR / "{sample}.shm.tsv"), sample=SAMPLE_NAMES),
+        expand(str(CLONES_DIR / "{sample}.clones.tsv"), sample=SAMPLE_NAMES)
+    output:
+        tsv=str(METRICS_DIR / "clone_size_vs_shm.spearman.tsv")
+    params:
+        outdir=str(METRICS_DIR / "clone_shm_corr"),
+        samples=" ".join(SAMPLE_NAMES),
+        metrics_dir=str(METRICS_DIR),
+        clones_dir=str(CLONES_DIR)
+    log:
+        str(LOG_DIR / "clone_size_shm_correlation.log")
+    conda:
+        STATS_ENV
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{params.outdir}"
+        python scripts/clone_size_shm_correlation.py \
+          --samples {params.samples} \
+          --metrics_dir "{params.metrics_dir}" \
+          --clones_dir "{params.clones_dir}" \
+          --out_tsv "{output.tsv}" \
+          --out_per_sample_dir "{params.outdir}" \
+          > "{log}" 2>&1
+        """
+
+
+# Plot clone-size vs SHM
+#
+rule plot_clone_size_vs_shm:
+    input:
+        corr=str(METRICS_DIR / "clone_size_vs_shm.spearman.tsv")
+    output:
+        all=str(FIGURES_DIR / "ALL.clone_size_vs_shm.scatter.png")
+    params:
+        per_clone_dir=str(METRICS_DIR / "clone_shm_corr"),
+        samples=" ".join(SAMPLE_NAMES)
+    log:
+        str(LOG_DIR / "plot_clone_size_vs_shm.log")
+    conda:
+        STATS_ENV
+    shell:
+        r"""
+        set -euo pipefail
+        python scripts/plot_clone_size_vs_shm.py \
+          --samples {params.samples} \
+          --per_clone_dir "{params.per_clone_dir}" \
+          --out_dir "{FIGURES_DIR}" \
+          > "{log}" 2>&1
+        test -s "{output.all}"
+        """
+
+
+# Top expanded clones report
+#
+rule top_expanded_clones_report:
+    input:
+        shm=str(METRICS_DIR / "{sample}.shm.tsv")
+    output:
+        tsv=str(METRICS_DIR / "{sample}.top_expanded_clones.tsv"),
+        summary=str(METRICS_DIR / "{sample}.top_expanded_clones.summary.txt")
+    log:
+        str(LOG_DIR / "{sample}.top_expanded_clones.log")
+    params:
+        top_n=TOP_N_EXPANDED
+    conda:
+        STATS_ENV
+    shell:
+        r"""
+        set -euo pipefail
+        python scripts/top_expanded_clones_report.py \
+          --shm_tsv "{input.shm}" \
+          --out_tsv "{output.tsv}" \
+          --out_summary "{output.summary}" \
+          --top_n {params.top_n} \
+          > "{log}" 2>&1
+        """
+
+
+# MiXCR run from IGH fasta (per sample)
+#
+rule run_mixcr:
+    input:
+        fasta=str(FASTA_DIR / "{sample}.IGH.fasta")
+    output:
+        map_tsv=str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.readId_to_cloneId.tsv"),
+        clones_tsv=str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.clones.tsv")
+    log:
+        str(LOG_DIR / "{sample}.mixcr.log")
+    threads: 4
+    conda:
+        MIXCR_ENV
+    params:
+        preset=lambda wc: str(MIXCR_PRESET),
+        species=lambda wc: str(MIXCR_SPECIES),
+        rna_flag=lambda wc: ("--rna" if MIXCR_RNA else ""),
+        left_boundary=lambda wc: str(MIXCR_LEFT_BOUNDARY),
+        right_mode=lambda wc: str(MIXCR_RIGHT_BOUNDARY_MODE),
+        right_anchor=lambda wc: str(MIXCR_RIGHT_BOUNDARY_ANCHOR),
+        assemble_by=lambda wc: str(MIXCR_ASSEMBLE_BY),
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{MIXCR_DIR}/{wildcards.sample}"
+
+        python scripts/run_mixcr_from_fasta.py \
+          --fasta "{input.fasta}" \
+          --outdir "{MIXCR_DIR}/{wildcards.sample}" \
+          --threads {threads} \
+          --species "{params.species}" \
+          --preset "{params.preset}" \
+          {params.rna_flag} \
+          --left_boundary "{params.left_boundary}" \
+          --right_boundary_mode "{params.right_mode}" \
+          --right_boundary_anchor "{params.right_anchor}" \
+          --assemble_by "{params.assemble_by}" \
+          --force \
+          --out_map_tsv "{output.map_tsv}" \
+          --out_clones_tsv "{output.clones_tsv}" \
+          > "{log}" 2>&1
+
+        test -s "{output.map_tsv}"
+        test -s "{output.clones_tsv}"
+        """
+
+
+# NEW: MiXCR readId -> sequence_id -> cloneId map (per sample)
+#
+rule mixcr_sequence_id_to_cloneId:
+    input:
+        fasta=str(FASTA_DIR / "{sample}.IGH.fasta"),
+        readmap=str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.readId_to_cloneId.tsv")
+    output:
+        seqmap=str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.sequenceId_to_cloneId.tsv")
+    log:
+        str(LOG_DIR / "{sample}.mixcr.sequenceId_to_cloneId.log")
+    run:
+        import pandas as pd
+
+        # FASTA headers in order
+        seq_ids = []
+        with open(input.fasta, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith(">"):
+                    seq_ids.append(line[1:].strip())
+
+        fasta_map = pd.DataFrame({
+            "readId": list(range(len(seq_ids))),   # MiXCR readId corresponds to FASTA record index
+            "sequence_id": seq_ids
+        })
+
+        mix = pd.read_csv(input.readmap, sep="\t", dtype=str).fillna("")
+        if "readId" not in mix.columns or "cloneId" not in mix.columns:
+            raise ValueError(f"Unexpected columns in {input.readmap}: {list(mix.columns)}")
+
+        # normalize types for join
+        fasta_map["readId"] = fasta_map["readId"].astype(str)
+        mix["readId"] = mix["readId"].astype(str)
+
+        out = fasta_map.merge(mix[["readId", "cloneId"]], on="readId", how="inner")
+        out = out[["sequence_id", "cloneId"]]
+
+        out.to_csv(output.seqmap, sep="\t", index=False)
+        Path(log[0]).write_text(f"FASTA records: {len(seq_ids)}\nMatched: {len(out)}\n")
+
+
+# Benchmark MiXCR vs Immcantation (per sample)
+#
+rule benchmark_mixcr_vs_immcantation:
+    input:
+        imm=str(CLONES_DIR / "{sample}.clones.tsv"),
+        mixmap=str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.sequenceId_to_cloneId.tsv")
+    output:
+        tsv=str(METRICS_DIR / "{sample}.mixcr_benchmark.tsv"),
+        summary=str(METRICS_DIR / "{sample}.mixcr_benchmark.summary.txt")
+    log:
+        str(LOG_DIR / "{sample}.mixcr_benchmark.log")
+    conda:
+        STATS_ENV
+    shell:
+        r"""
+        set -euo pipefail
+        python scripts/benchmark_mixcr_vs_immcantation.py \
+          --sample "{wildcards.sample}" \
+          --immcantation_clones_tsv "{input.imm}" \
+          --mixcr_map_tsv "{input.mixmap}" \
+          --out_tsv "{output.tsv}" \
+          --out_summary "{output.summary}" \
+          --min_expanded_size {BENCH_MIN_EXP_SIZE} \
+          > "{log}" 2>&1
+        """
+
+
+# Master benchmark summary across samples
+#
+rule mixcr_benchmark_master:
+    input:
+        expand(str(METRICS_DIR / "{sample}.mixcr_benchmark.summary.txt"), sample=SAMPLE_NAMES)
+    output:
+        tsv=str(METRICS_DIR / "mixcr_benchmark.master.tsv")
+    log:
+        str(LOG_DIR / "mixcr_benchmark.master.log")
+    run:
+        rows = []
+        for s in SAMPLE_NAMES:
+            p = METRICS_DIR / f"{s}.mixcr_benchmark.summary.txt"
+            d = {"sample": s}
+            if not p.exists():
+                continue
+            for line in p.read_text().splitlines():
+                if not line.strip():
+                    continue
+                if "\t" not in line:
+                    continue
+                k, v = line.split("\t", 1)
+                d[k] = v
+            rows.append(d)
+        df = pd.DataFrame(rows)
+        df.to_csv(output.tsv, sep="\t", index=False)
+        Path(log[0]).write_text("Wrote: " + str(output.tsv) + "\n")

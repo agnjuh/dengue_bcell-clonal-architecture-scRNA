@@ -1,0 +1,4 @@
+germline:
+  v_fasta: "resources/germline/imgt_IGH/human_IGHV_imgt.fasta"
+  d_fasta: "resources/germline/imgt_IGH/human_IGHD_imgt.fasta"
+  j_fasta: "resources/germline/imgt_IGH/human_IGHJ_imgt.fasta"

@@ -1,0 +1,9 @@
+samples:
+  H1:
+    vdj_b: "data/raw/pilot_H1H4_S1S4/GSM8771156_H1_VDJ-B_filtered_contig_annotations.csv.gz"
+  H4:
+    vdj_b: "data/raw/pilot_H1H4_S1S4/GSM8771178_H4_VDJ-B_filtered_contig_annotations.csv.gz"
+  S1:
+    vdj_b: "data/raw/pilot_H1H4_S1S4/GSM8771190_S1_VDJ-B_filtered_contig_annotations.csv.gz"
+  S4:
+    vdj_b: "data/raw/pilot_H1H4_S1S4/GSM8771162_S4_VDJ-B_filtered_contig_annotations.csv.gz"
