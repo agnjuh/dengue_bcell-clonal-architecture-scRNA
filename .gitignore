@@ -1,35 +1,98 @@
-# OS / editor
+
+# OS / SYSTEM
 .DS_Store
-*.swp
-*~
-*.bak
+Thumbs.db
 
-# results (already)
+
+# PYTHON
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+.ipynb_checkpoints/
+
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+.Ruserdata
+
+
+# CONDA / VIRTUAL ENVIRONMENTS
+.env
+.venv
+venv/
+env/
+conda-meta/
+
+
+# SNAKEMAKE
+.snakemake/
+snakemake.log
+snakemake.stats
+
+
+# LOGS
+logs/
+*.log
+
+
+# PIPELINE OUTPUTS
 results/
+intermediate/
+tmp/
+temp/
 
-# raw / large data
-data/raw/
-data/**/raw/
-*.h5
-*.h5ad
-*.loom
-*.rds
-*.qs
-*.csv.gz
-*.tsv.gz
+
+# RAW AND LARGE DATA
+data/
+
+
+# COMMON NGS / BIOINFO LARGE FILES
+*.bam
+*.bai
+*.sam
+*.cram
+*.crai
+*.fastq
+*.fq
 *.fastq.gz
-*.fasta.gz
+*.fq.gz
+*.vcf
+*.vcf.gz
+*.h5
+*.hdf5
+*.loom
+*.mtx
+*.tsv.gz
+*.csv.gz
+*.zip
+*.tar
+*.tar.gz
 
-# bundles / binaries
+
+# LARGE REFERENCE BUNDLES / BINARIES
 resources/igblast_full/
 resources/ncbi_igblast_bundle/
-resources/**/blastdb/*.n*
-resources/**/blastdb/*.p*
+resources/**/blastdb/
 
-# snakemake / conda caches
-.snakemake/
-**/.snakemake/
 
-# accidental copies
-workflow/*copy*
-workflow/*Copy*
+# KEEP SMALL REFERENCE FASTA FILES
+!resources/**/*.fasta
+!resources/**/*.fa
+!resources/**/*.fasta.gz
+!resources/**/*.fa.gz
+
+
+# EDITOR FILES
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
