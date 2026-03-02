@@ -1,5 +1,6 @@
-# Integrated single-cell analysis of Dengue B cell repertoires
-## Transcriptional structure, IGH clonal expansion and somatic diversification across four samples
+# Quantitative clonal architecture and somatic diversification in ssingle-cell B cell repertoires during secondary dengue infection
+
+## Integrated single-cell analysis of GSE288613 combining 10x Genomics gene expression and VDJ sequencing to resolve clonal expansion, somatic hypermutation burden, isotype composition and CDR3 architecture across hospitalised (H1, H4) and subclinical (S1, S4) secondary dengue cases.
 
 This repository presents an integrated single-cell analysis of B cell receptor repertoires across four samples (H1, H4, S1, S4). The framework combines clonotype reconstruction, somatic hypermutation (SHM) quantification, V gene usage profiling, isotype distribution and CDR3 amino-acid length analysis within a transcriptionally resolved landscape.
 
