@@ -137,7 +137,7 @@ Agreement between MiXCR and Immcantation-derived clones is summarised in `result
 
 ## Summary
 
-Across all four samples, clonal expansion, SHM burden, isotype composition and V gene usage exhibit structured, non-random organisation within the transcriptional landscape. Expanded clones are distributed across multiple transcriptional states. Quantitative outputs summarise SHM differences between expanded and non-expanded clones, clone size–SHM associations, robustness of clone calling across distance thresholds, and concordance between MiXCR and Immcantation clone assignments.
+Across all four samples, clonal expansion, SHM burden, isotype composition and V gene usage exhibit structured organisation within the transcriptional landscape. Expanded clones are distributed across multiple transcriptional states. Quantitative outputs summarise SHM differences between expanded and non-expanded clones, clone size–SHM associations, robustness of clone calling across distance thresholds, and concordance between MiXCR and Immcantation clone assignments.
 
 ---
 
