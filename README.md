@@ -6,11 +6,13 @@ This repository presents an integrated single-cell analysis of B cell receptor r
 
 Rather than treating repertoire features independently, the analysis situates clonal expansion and diversification within defined transcriptional states, enabling joint interpretation of transcriptional identity, mutation burden and clonal architecture.
 
+Clonotype definitions in this repository are based on IGH sequences extracted from 10x VDJ-B output. SHM values are derived from IgBLAST AIRR output (outfmt 19) using the v_identity field under the IMGT domain system settings specified in the workflow.
+
 ---
 
 ## Global transcriptional structure
 
-The global UMAP embedding (`UMAP_group_H_vs_S.png`) shows substantial overlap between H and S groups, consistent with shared transcriptional structure rather than discrete segregation.
+The global UMAP embedding (`UMAP_group_H_vs_S.png`) shows substantial overlap between H and S groups. In this low-dimensional embedding, no clear condition-specific segregation is visually apparent.
 
 ![UMAP_group_H_vs_S.png](figures/UMAP_group_H_vs_S.png)
 
@@ -26,7 +28,7 @@ Cluster-level marker structure (`Cluster_marker_panel_dotplot.png`) provides the
 
 ## Somatic hypermutation (SHM)
 
-Per-sample SHM distributions (`SHM_box_by_sample.png`) compare expanded versus non-expanded clones.
+SHM rates were derived from AIRR-formatted IgBLAST output using the reported v_identity field. Per-sample SHM distributions (`SHM_box_by_sample.png`) compare expanded versus non-expanded clones.
 
 ![SHM_box_by_sample.png](figures/SHM_box_by_sample.png)
 
@@ -137,7 +139,8 @@ Agreement between MiXCR and Immcantation-derived clones is summarised in `result
 
 ## Summary
 
-Across all four samples, clonal expansion, SHM burden, isotype composition and V gene usage exhibit structured organisation within the transcriptional landscape. Expanded clones are distributed across multiple transcriptional states. Quantitative outputs summarise SHM differences between expanded and non-expanded clones, clone size–SHM associations, robustness of clone calling across distance thresholds, and concordance between MiXCR and Immcantation clone assignments.
+Across all four samples, clonal expansion, SHM burden, isotype composition and V gene usage are represented within the transcriptional landscape. Expanded clones are distributed across multiple transcriptional states. Quantitative outputs summarise SHM differences between expanded and non-expanded clones, clone size–SHM associations, robustness of clone calling across distance thresholds, and concordance between MiXCR and Immcantation clone assignments.
+
 
 ---
 
