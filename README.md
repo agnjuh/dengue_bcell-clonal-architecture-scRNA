@@ -90,8 +90,27 @@ Across all four samples, clonal expansion, SHM burden, isotype composition and V
 
 ## Data provenance and references
 
-Primary dataset:
-Gonnella G et al. Immune profiling in subclinical secondary dengue-infected cases reveals adaptive immune signatures correlated to protection from severe dengue. Cell Host & Microbe. 2025. DOI: https://doi.org/10.1016/j.chom.2025.06.006
+### Primary dataset
 
-Gene Expression Omnibus:
-GSE288613: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE288613
+Gonnella G et al.  
+*Immune profiling in subclinical secondary dengue-infected cases reveals adaptive immune signatures correlated to protection from severe dengue.*  
+Cell Host & Microbe. 2025.  
+DOI: https://doi.org/10.1016/j.chom.2025.06.006
+
+### Gene Expression Omnibus
+
+GSE288613  
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE288613
+
+### Repertoire profiling software
+
+Bolotin DA, Poslavsky S, Mitrophanov I, Shugay M, Mamedov IZ, Putintseva EV, Chudakov DM (2015).  
+*MiXCR: software for comprehensive adaptive immunity profiling.*  
+Nature Methods 12:380–381.
+
+Bolotin DA, Poslavsky S, Davydov AN, Frenkel FE, Fanchi L, Zolotareva OI, Hemmers S, Putintseva EV, Obraztsova AS, Shugay M, Ataullakhanov RI, Rudensky AY, Schumacher TN, Chudakov DM (2017).  
+*Antigen receptor repertoire profiling from RNA-seq data.*  
+Nature Biotechnology 35:908–911.
+
+MiXCR was used under an academic license obtained through Uppsala University.
+
