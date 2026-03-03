@@ -1,12 +1,44 @@
 ############################################
 # dengue-scBCR-clonal-architecture pipeline
-# 10x VDJ-B -> IGH FASTA -> short FASTA+idmap
-# -> IgBLAST short outfmt7 (junction parsing)
-# -> IgBLAST short AIRR outfmt19 + id remap
-# -> ChangeO-like DB -> DefineClones -> sweep
-# -> SHM from AIRR (v_identity) + stats/plots + clone-size vs SHM correlation
-# -> Top expanded clones report
-# -> MiXCR benchmark vs Immcantation (+ master benchmark summary)
+#
+# Inputs:
+#   10x VDJ-B contig annotations (per sample; config/samples.yml)
+#   IMGT germline references + IgBLAST bundle (resources/)
+#
+# Heavy chain clonal workflow (Immcantation-style):
+#   10x VDJ-B -> IGH FASTA
+#   -> short FASTA + idmap (stable IDs for IgBLAST)
+#   -> IgBLAST outfmt7 (junction parsing)
+#   -> IgBLAST AIRR outfmt19 (v_identity for SHM)
+#   -> sequence_id remap (short IDs -> original 10x headers)
+#   -> minimal ChangeO-like DB
+#   -> DefineClones (ham; len-normalised; dist configurable) + threshold sweep
+#   -> SHM metrics + per-sample and cross-sample plots
+#   -> Top expanded clones report
+#
+# VH–VL pairing (from 10x barcode-level contigs):
+#   10x contig annotations -> barcode-level VH/VL pairs
+#   -> V-gene pairing tables + per-sample heatmaps
+#   -> multi-sample VH–VL V-gene heatmap (global top genes)
+#   -> pairing entropy vs clone expansion (per sample)
+#   -> zero vs non-zero entropy comparison (master summary)
+#   -> clone pairing dominance summary + cross-sample correlations
+#
+# MiXCR comparison:
+#   IGH FASTA -> MiXCR clones
+#   -> sequence_id -> cloneId mapping
+#   -> benchmarking vs Immcantation clones + master summary table
+#
+# Key outputs:
+#  results/clones/, results/clones/sweep/
+#  results/igblast_airr/, results/changeo_db/
+#  results/pairing/
+#  results/metrics/, results/figures/
+#
+# Notes:
+#  IGH FASTA is used for IgBLAST/DefineClones and for MiXCR benchmarking.
+#  VH–VL pairing uses 10x contig annotations directly (barcode-level),
+#  independent of the IGH-only cloning step.
 ############################################
 
 import re
@@ -14,8 +46,8 @@ import pandas as pd
 from pathlib import Path
 
 # Project root & workdir
-BASEDIR = Path(workflow.basedir).resolve()      # .../workflow
-PROJECT_ROOT = BASEDIR.parent                   # project root
+BASEDIR = Path(workflow.basedir).resolve()
+PROJECT_ROOT = BASEDIR.parent
 workdir: str(PROJECT_ROOT)
 
 # Config
@@ -128,7 +160,6 @@ for d in [
 
 
 # all
-#
 rule all:
     input:
         # clones + threshold sweep
@@ -156,7 +187,7 @@ rule all:
         expand(str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.readId_to_cloneId.tsv"), sample=SAMPLE_NAMES),
         expand(str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.clones.tsv"), sample=SAMPLE_NAMES),
 
-        # NEW: MiXCR sequence_id -> cloneId map (for benchmarking)
+        # MiXCR sequence_id -> cloneId map (for benchmarking)
         expand(str(MIXCR_DIR / "{sample}" / "{sample}.mixcr.sequenceId_to_cloneId.tsv"), sample=SAMPLE_NAMES),
 
         # Benchmark per sample + master
@@ -166,7 +197,6 @@ rule all:
 
 
 # check germline
-#
 rule check_germline_fastas:
     input:
         v=V_FASTA, d=D_FASTA, j=J_FASTA
@@ -194,7 +224,6 @@ rule check_germline_fastas:
 
 
 # 10x contigs -> IGH fasta
-#
 rule tenx_vdjB_to_igh_fasta:
     input:
         ok=str(OK_FILE),
@@ -219,7 +248,6 @@ rule tenx_vdjB_to_igh_fasta:
 
 
 # short fasta + idmap
-#
 rule make_short_fasta_and_idmap:
     input:
         fasta=str(FASTA_DIR / "{sample}.IGH.fasta")
@@ -261,7 +289,6 @@ rule make_short_fasta_and_idmap:
 
 
 # IgBLAST short outfmt7 (junction parsing)
-#
 rule igblast_short_outfmt7:
     input:
         short_fasta=str(FASTA_SHORT_DIR / "{sample}.IGH.short.fasta"),
@@ -292,7 +319,6 @@ rule igblast_short_outfmt7:
 
 
 # IgBLAST short AIRR outfmt19
-#
 rule igblast_short_airr:
     input:
         short_fasta=str(FASTA_SHORT_DIR / "{sample}.IGH.short.fasta"),
@@ -323,7 +349,6 @@ rule igblast_short_airr:
 
 
 # Remap AIRR sequence_id: short_id -> original long header (10x)
-#
 rule remap_airr_sequence_id:
     input:
         airr=str(IGBLAST_AIRR_DIR / "{sample}.short.airr.tsv"),
@@ -346,7 +371,6 @@ rule remap_airr_sequence_id:
 
 
 # Build ChangeO-like minimal DB
-#
 rule build_changeo_like_db:
     input:
         airr=str(IGBLAST_AIRR_DIR / "{sample}.airr.tsv"),
@@ -409,7 +433,6 @@ rule build_changeo_like_db:
 
 
 # Clean + lowercase (DefineClones needs lowercase fields)
-#
 rule clean_and_lowercase_db:
     input:
         db=str(CHANGEO_DIR / "{sample}.db.tsv")
@@ -436,7 +459,6 @@ rule clean_and_lowercase_db:
 
 
 # DefineClones
-#
 rule define_clones:
     input:
         db=str(CHANGEO_DIR / "{sample}.db.cleaned.lower.tsv")
@@ -461,7 +483,6 @@ rule define_clones:
 
 
 # Sweep thresholds
-#
 rule sweep_thresholds:
     input:
         db=str(CHANGEO_DIR / "{sample}.db.cleaned.lower.tsv")
@@ -536,7 +557,6 @@ rule sweep_thresholds:
 
 
 # SHM from AIRR (v_identity) + clones
-#
 rule shm_from_airr:
     input:
         airr=str(IGBLAST_AIRR_DIR / "{sample}.airr.tsv"),
@@ -561,7 +581,6 @@ rule shm_from_airr:
 
 
 # SHM stats across samples + plots
-#
 rule shm_stats_and_plots:
     input:
         expand(str(METRICS_DIR / "{sample}.shm.tsv"), sample=SAMPLE_NAMES)
@@ -590,7 +609,6 @@ rule shm_stats_and_plots:
 
 
 # Clone-size vs SHM correlation
-#
 rule clone_size_shm_correlation:
     input:
         expand(str(METRICS_DIR / "{sample}.shm.tsv"), sample=SAMPLE_NAMES),
@@ -621,7 +639,6 @@ rule clone_size_shm_correlation:
 
 
 # Plot clone-size vs SHM
-#
 rule plot_clone_size_vs_shm:
     input:
         corr=str(METRICS_DIR / "clone_size_vs_shm.spearman.tsv")
@@ -647,7 +664,6 @@ rule plot_clone_size_vs_shm:
 
 
 # Top expanded clones report
-#
 rule top_expanded_clones_report:
     input:
         shm=str(METRICS_DIR / "{sample}.shm.tsv")
@@ -673,7 +689,6 @@ rule top_expanded_clones_report:
 
 
 # MiXCR run from IGH fasta (per sample)
-#
 rule run_mixcr:
     input:
         fasta=str(FASTA_DIR / "{sample}.IGH.fasta")
@@ -719,8 +734,7 @@ rule run_mixcr:
         """
 
 
-# NEW: MiXCR readId -> sequence_id -> cloneId map (per sample)
-#
+# MiXCR readId -> sequence_id -> cloneId map (per sample)
 rule mixcr_sequence_id_to_cloneId:
     input:
         fasta=str(FASTA_DIR / "{sample}.IGH.fasta"),
@@ -760,7 +774,6 @@ rule mixcr_sequence_id_to_cloneId:
 
 
 # Benchmark MiXCR vs Immcantation (per sample)
-#
 rule benchmark_mixcr_vs_immcantation:
     input:
         imm=str(CLONES_DIR / "{sample}.clones.tsv"),
@@ -787,7 +800,6 @@ rule benchmark_mixcr_vs_immcantation:
 
 
 # Master benchmark summary across samples
-#
 rule mixcr_benchmark_master:
     input:
         expand(str(METRICS_DIR / "{sample}.mixcr_benchmark.summary.txt"), sample=SAMPLE_NAMES)
