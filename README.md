@@ -20,7 +20,7 @@ The global UMAP embedding (`UMAP_group_H_vs_S.png`) shows substantial overlap be
 
 ![UMAP_group_H_vs_S.png](figures/UMAP_group_H_vs_S.png)
 
-When restricting the embedding to expanded clones (`UMAP_expanded.png`), expanded cells are distributed across multiple transcriptional states rather than confined to a single compartment.
+When restricting the embedding to expanded clones (`UMAP_expanded.png`), expanded cells are relatively rare and appear enriched in specific regions of the transcriptional landscape rather than uniformly distributed across all states.
 
 ![UMAP_expanded.png](figures/UMAP_expanded.png)
 
@@ -162,7 +162,7 @@ Dominance (maximum VH–VL pair fraction) and entropy are mathematically coupled
 
 ## Summary
 
-Across all four samples, clonal expansion, SHM burden, isotype composition and V gene usage are represented within the transcriptional landscape. Expanded clones are distributed across multiple transcriptional states. Quantitative outputs summarise SHM differences between expanded and non-expanded clones, clone size–SHM associations, robustness of clone calling across distance thresholds, and VH–VL pairing architecture within IGH-defined lineages.
+Across all four samples, clonal expansion, SHM burden, isotype composition and V gene usage are represented within the transcriptional landscape. Expanded clones are relatively rare and show enrichment in specific regions of the transcriptional landscape rather than being uniformly distributed across all states. Quantitative outputs summarise SHM differences between expanded and non-expanded clones, clone size–SHM associations, robustness of clone calling across distance thresholds, and VH–VL pairing architecture within IGH-defined lineages.
 
 ---
 
