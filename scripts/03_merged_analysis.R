@@ -36,14 +36,26 @@ p1 <- DimPlot(merged, group.by = "group", reduction = "umap") +
 ggsave("results/figures/UMAP_group_H_vs_S.png", p1, width=6, height=5)
 
 # UMAP by expansion
-merged$is_expanded <- factor(ifelse(isTRUE(merged$is_expanded), "Expanded", "Non-expanded"))
-# Note: is_expanded is stored in meta.data, ensure it's present
 if (!"is_expanded" %in% colnames(merged@meta.data)) {
   stop("is_expanded not found in merged metadata. Check VDJ integration step.")
 }
+
+merged$is_expanded <- factor(
+  ifelse(
+    is.na(merged$is_expanded),
+    "Non-expanded",
+    ifelse(merged$is_expanded, "Expanded", "Non-expanded")
+  ),
+  levels = c("Non-expanded", "Expanded")
+)
+
+print(table(merged$is_expanded, useNA = "ifany"))
+
 p2 <- DimPlot(merged, group.by = "is_expanded", reduction = "umap") +
-  ggtitle("B cells – expanded clones")
-ggsave("results/figures/UMAP_expanded.png", p2, width=6, height=5)
+  ggtitle("B cells – expanded vs non-expanded clones")
+
+ggsave("results/figures/UMAP_expanded.png", p2, width = 6, height = 5)
+
 
 # V gene usage
 meta <- merged@meta.data
